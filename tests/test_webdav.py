@@ -15,11 +15,11 @@ class TestWebDAV(LocalNxcUserMixin, BaseTestCase):
 
     COLLECTION_TYPE = 'collection'
 
-    def create_and_upload_file(self, file_name, file_content):
+    def create_and_upload_file(self, file_name, file_content, timestamp=None):
         with open(file_name, "w") as f:
             f.write(file_content)
         file_local_path = os.path.abspath(file_name)
-        return self.nxc_local.upload_file(self.user_username, file_local_path, file_name)
+        return self.nxc_local.upload_file(self.user_username, file_local_path, file_name, timestamp)
 
     def test_list_folders(self):
         res = self.nxc_local.list_folders(self.user_username)
@@ -57,6 +57,50 @@ class TestWebDAV(LocalNxcUserMixin, BaseTestCase):
         with open(file_local_path, 'r') as f:
             downloaded_file_content = f.read()
         assert downloaded_file_content == file_content
+
+        # delete file
+        self.nxc_local.delete_path(self.user_username, file_name)
+        os.remove(file_local_path)
+
+    def test_upload_download_file_with_timestamp(self):
+        file_name = "test_file"
+        file_content = "test file content"
+        file_local_path = os.path.join(os.getcwd(), file_name)
+
+        # 2001-09-09T01:46:40 (UTC & GMT)
+        timestamp = 1000000000
+
+        res = self.create_and_upload_file(file_name, file_content, timestamp)
+
+        # check status code
+        assert res.is_ok
+        assert res.raw.status_code == self.CREATED_CODE
+
+        # test uploaded file can be found with list_folders
+        file_nextcloud_href = os.path.join(WebDAV.API_URL, self.user_username, file_name)
+        folder_info = self.nxc_local.list_folders(self.user_username, path=file_name)
+
+        assert folder_info.is_ok
+        assert len(folder_info.data) == 1
+        assert isinstance(folder_info.data[0], dict)
+        # check href
+        assert folder_info.data[0]['href'] == file_nextcloud_href
+        # test timestamp of uploaded file
+        assert folder_info.data[0]["last_modified"] == "Sun, 09 Sep 2001 01:46:40 GMT"
+
+        # remove file on local machine
+        os.remove(file_local_path)
+        self.nxc_local.download_file(self.user_username, file_name)
+
+        # test file is downloaded to current dir
+        assert file_name in os.listdir(".")
+        with open(file_local_path, 'r') as f:
+            downloaded_file_content = f.read()
+        assert downloaded_file_content == file_content
+
+        # test timestamp of downloaded file
+        downloaded_file_timestamp = os.path.getmtime(file_local_path)
+        assert downloaded_file_timestamp == timestamp
 
         # delete file
         self.nxc_local.delete_path(self.user_username, file_name)

@@ -54,6 +54,15 @@ class Requester(object):
         return self.rtn(res)
 
     @catch_connection_error
+    def put_with_timestamp(self, url="", data=None, timestamp=None):
+        h_post = self.h_post
+        if isinstance(timestamp, (float, int)):
+            h_post["X-OC-MTIME"] = f"{timestamp:.0f}"
+        url = self.get_full_url(url)
+        res = requests.put(url, auth=self.auth_pk, data=data, headers=h_post)
+        return self.rtn(res)
+
+    @catch_connection_error
     def put(self, url="", data=None):
         url = self.get_full_url(url)
         res = requests.put(url, auth=self.auth_pk, data=data, headers=self.h_post)

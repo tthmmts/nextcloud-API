@@ -5,6 +5,7 @@ import pathlib
 
 import xml.etree.ElementTree as ET
 
+from datetime import datetime
 from nextcloud.base import WithRequester
 
 
@@ -102,7 +103,15 @@ class WebDAV(WithRequester):
         with open(filename, 'wb') as f:
             f.write(res.data)
 
-    def upload_file(self, uid, local_filepath, remote_filepath):
+        # set timestamp of downloaded file
+        file_timestamp_str = (file_data.data[0].get('last_modified'))
+        try:
+            file_timestamp = datetime.strptime(file_timestamp_str, '%a, %d %b %Y %H:%M:%S GMT')
+            os.utime(filename, (datetime.now().timestamp(), file_timestamp.timestamp()))
+        except ValueError:
+            pass
+
+    def upload_file(self, uid, local_filepath, remote_filepath, timestamp=None):
         """
         Upload file to Nextcloud storage
 
@@ -110,12 +119,15 @@ class WebDAV(WithRequester):
             uid (str): uid of user
             local_filepath (str): path to file on local storage
             remote_filepath (str): path where to upload file on Nextcloud storage
+            timestamp (int):  mtime of upload file. If None, get time by local file.
         """
         with open(local_filepath, 'rb') as f:
             file_contents = f.read()
-        return self.upload_file_contents(uid, file_contents, remote_filepath)
+        if timestamp is None:
+            timestamp = int(os.path.getmtime(local_filepath))
+        return self.upload_file_contents(uid, file_contents, remote_filepath, timestamp)
 
-    def upload_file_contents(self, uid, file_contents, remote_filepath):
+    def upload_file_contents(self, uid, file_contents, remote_filepath, timestamp=None):
         """
         Upload file to Nextcloud storage
 
@@ -123,9 +135,10 @@ class WebDAV(WithRequester):
             uid (str): uid of user
             file_contents (bytes): Bytes the file to be uploaded consists of
             remote_filepath (str): path where to upload file on Nextcloud storage
+            timestamp (int):  mtime of upload file
         """
         additional_url = "/".join([uid, remote_filepath])
-        return self.requester.put(additional_url, data=file_contents)
+        return self.requester.put_with_timestamp(additional_url, data=file_contents, timestamp=timestamp)
 
     def create_folder(self, uid, folder_path):
         """
@@ -254,7 +267,6 @@ class WebDAV(WithRequester):
 
 
 class File(object):
-
     SUCCESS_STATUS = 'HTTP/1.1 200 OK'
 
     # key is NextCloud property, value is python variable name
