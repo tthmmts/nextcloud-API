@@ -74,6 +74,7 @@ class WebDAV(WithRequester):
         Download file of given user by path
         File will be saved to working directory
         path argument must be valid file path
+        Modified time of saved file will be synced with the file properties in Nextcloud
 
         Exception will be raised if:
             * path doesn't exist,
@@ -103,13 +104,13 @@ class WebDAV(WithRequester):
         with open(filename, 'wb') as f:
             f.write(res.data)
 
-        # set timestamp of downloaded file
+        # get timestamp of downloaded file from file property on Nextcloud
+        # If it succeeded, set the timestamp to saved local file
+        # If the timestamp string is invalid or broken, the timestamp is downloaded time.
         file_timestamp_str = (file_data.data[0].get('last_modified'))
-        try:
-            file_timestamp = datetime.strptime(file_timestamp_str, '%a, %d %b %Y %H:%M:%S GMT')
-            os.utime(filename, (datetime.now().timestamp(), file_timestamp.timestamp()))
-        except ValueError:
-            pass
+        file_timestamp = timestamp_to_epoch_time(file_timestamp_str)
+        if isinstance(file_timestamp, int):
+            os.utime(filename, (datetime.now().timestamp(), file_timestamp))
 
     def upload_file(self, uid, local_filepath, remote_filepath, timestamp=None):
         """
@@ -119,7 +120,7 @@ class WebDAV(WithRequester):
             uid (str): uid of user
             local_filepath (str): path to file on local storage
             remote_filepath (str): path where to upload file on Nextcloud storage
-            timestamp (int):  mtime of upload file. If None, get time by local file.
+            timestamp (int): timestamp of upload file. If None, get time by local file.
         """
         with open(local_filepath, 'rb') as f:
             file_contents = f.read()
@@ -333,3 +334,23 @@ class WebDAVStatusCodes(object):
     MULTISTATUS_CODE = 207
     ALREADY_EXISTS_CODE = 405
     PRECONDITION_FAILED_CODE = 412
+
+
+def timestamp_to_epoch_time(rfc1123_date=""):
+    """
+    literal date time string (use in DAV:getlastmodified) to Epoch time
+
+    No longer, Only rfc1123-date productions are legal as values for DAV:getlastmodified
+    However, the value may be broken or invalid.
+
+    Args:
+        rfc1123_date (str): rfc1123-date (defined in RFC2616)
+    Return:
+        int or None : Epoch time, if date string value is invalid return None
+    """
+    try:
+        epoch_time = datetime.strptime(rfc1123_date, '%a, %d %b %Y %H:%M:%S GMT').timestamp()
+    except ValueError:
+        # validation error (DAV:getlastmodified property is broken or invalid)
+        return None
+    return int(epoch_time)

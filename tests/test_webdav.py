@@ -1,8 +1,10 @@
 import os
 from requests.utils import quote
+from datetime import datetime
 
 from .base import BaseTestCase, LocalNxcUserMixin
 from nextcloud.api_wrappers import WebDAV
+from nextcloud.api_wrappers.webdav import timestamp_to_epoch_time
 
 
 class TestWebDAV(LocalNxcUserMixin, BaseTestCase):
@@ -63,13 +65,14 @@ class TestWebDAV(LocalNxcUserMixin, BaseTestCase):
         os.remove(file_local_path)
 
     def test_upload_download_file_with_timestamp(self):
-        file_name = "test_file"
-        file_content = "test file content"
+        file_name = "test_file_1579520460"
+        file_content = "Test file: Mon, 20 Jan 2020 20:41:00 GMT"
         file_local_path = os.path.join(os.getcwd(), file_name)
 
-        # 2001-09-09T01:46:40 (UTC & GMT)
-        timestamp = 1000000000
-
+        # create test file, and upload it as timestamp: Mon, 20 Jan 2020 20:41:00 GMT
+        timestamp_str = "Mon, 20 Jan 2020 20:41:00 GMT"
+        timestamp = timestamp_to_epoch_time(timestamp_str)
+        assert timestamp == 1579552860
         res = self.create_and_upload_file(file_name, file_content, timestamp)
 
         # check status code
@@ -85,8 +88,8 @@ class TestWebDAV(LocalNxcUserMixin, BaseTestCase):
         assert isinstance(folder_info.data[0], dict)
         # check href
         assert folder_info.data[0]['href'] == file_nextcloud_href
-        # test timestamp of uploaded file
-        assert folder_info.data[0]["last_modified"] == "Sun, 09 Sep 2001 01:46:40 GMT"
+        # test timestamp of uploaded file in Nextcloud
+        assert folder_info.data[0]["last_modified"] == timestamp_str
 
         # remove file on local machine
         os.remove(file_local_path)
@@ -105,6 +108,61 @@ class TestWebDAV(LocalNxcUserMixin, BaseTestCase):
         # delete file
         self.nxc_local.delete_path(self.user_username, file_name)
         os.remove(file_local_path)
+
+    def test_upload_download_file_using_local_file_property(self):
+        file_name = "test_file_1000000000"
+        file_content = "Test file: Sun, 09 Sep 2001 01:46:40 GMT"
+
+        # create test file with timestamp: Sun, 09 Sep 2001 01:46:40 GMT
+        timestamp_str = "Sun, 09 Sep 2001 01:46:40 GMT"
+        timestamp = timestamp_to_epoch_time(timestamp_str)
+        assert timestamp == 1000000000
+
+        # create test file
+        with open(file_name, "w") as f:
+            f.write(file_content)
+        file_local_path = os.path.abspath(file_name)
+
+        # set timestamp to saved test file
+        os.utime(file_local_path, (timestamp, timestamp))
+
+        # upload test file, timestamp comes from local file's property
+        res = self.nxc_local.upload_file(self.user_username, file_local_path, file_name, timestamp=None)
+
+        # check status code
+        assert res.is_ok
+        assert res.raw.status_code == self.CREATED_CODE
+
+        # test uploaded file can be found with list_folders
+        file_nextcloud_href = os.path.join(WebDAV.API_URL, self.user_username, file_name)
+        folder_info = self.nxc_local.list_folders(self.user_username, path=file_name)
+
+        assert folder_info.is_ok
+        assert len(folder_info.data) == 1
+        assert isinstance(folder_info.data[0], dict)
+        # check href
+        assert folder_info.data[0]['href'] == file_nextcloud_href
+        # test timestamp of uploaded file in Nextcloud
+        assert folder_info.data[0]["last_modified"] == timestamp_str
+
+        # remove file on local machine
+        os.remove(file_local_path)
+        self.nxc_local.download_file(self.user_username, file_name)
+
+        # test file is downloaded to current dir
+        assert file_name in os.listdir(".")
+        with open(file_local_path, 'r') as f:
+            downloaded_file_content = f.read()
+        assert downloaded_file_content == file_content
+
+        # test timestamp of downloaded file
+        downloaded_file_timestamp = os.path.getmtime(file_local_path)
+        assert downloaded_file_timestamp == timestamp
+
+        # delete file
+        self.nxc_local.delete_path(self.user_username, file_name)
+        os.remove(file_local_path)
+
 
     def test_create_folder(self):
         folder_name = "test folder5"
@@ -275,3 +333,36 @@ class TestWebDAV(LocalNxcUserMixin, BaseTestCase):
         assert len(res.data) == 1
         assert res.data[0]['href'] == file_nextcloud_href
 
+    def test_timestamp_to_epoch_time(self):
+        timestamp_str = "Thu, 01 Dec 1994 16:00:00 GMT"
+        timestamp_unix_time = timestamp_to_epoch_time(timestamp_str)
+        assert timestamp_unix_time == 786297600
+        assert timestamp_str == datetime.utcfromtimestamp(timestamp_unix_time).strftime('%a, %d %b %Y %H:%M:%S GMT')
+
+        timestamp_str = "Fri, 14 Jul 2017 02:40:00 GMT"
+        timestamp_unix_time = timestamp_to_epoch_time(timestamp_str)
+        assert timestamp_unix_time == 1500000000
+        assert timestamp_str == datetime.utcfromtimestamp(timestamp_unix_time).strftime('%a, %d %b %Y %H:%M:%S GMT')
+
+        # UTM timezone is invalid for WebDav
+        timestamp_str = "Thu, 01 Dec 1994 16:00:00 UTM"
+        timestamp_unix_time = timestamp_to_epoch_time(timestamp_str)
+        assert timestamp_unix_time is None
+        assert timestamp_unix_time != 786297600
+
+        # RFC 850 (part of http-date) format is invalid for WebDav
+        timestamp_str = "Sunday, 06-Nov-94 08:49:37 GMT"
+        timestamp_unix_time = timestamp_to_epoch_time(timestamp_str)
+        assert timestamp_unix_time is None
+        assert timestamp_unix_time != 784111777
+
+        # ISO 8601 is invalid for WebDav
+        timestamp_str = "2007-03-01T13:00:00Z"
+        timestamp_unix_time = timestamp_to_epoch_time(timestamp_str)
+        assert timestamp_unix_time is None
+        assert timestamp_unix_time != 1172754000
+
+        # broken date string
+        timestamp_str = " "
+        timestamp_unix_time = timestamp_to_epoch_time(timestamp_str)
+        assert timestamp_unix_time is None
